@@ -13,7 +13,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
 # ---------- Конфигурация ----------
-TOKEN = os.getenv("TOKEN")                     # токен бота
+TOKEN = os.getenv("8785149097:AAGl_nJTi9LgMXdERKonwhnOzYtW87T7Li0")                     # токен бота
 SBP_LINK = os.getenv("SBP_LINK", "https://example.com/pay")  # ссылка на оплату СБП
 STARS_PRICE = int(os.getenv("STARS_PRICE", 100))             # цена в звёздах
 INVITE_LINK = "https://t.me/+s1xuxYDZbzxjNWZi"              # ссылка на закрытый канал
