@@ -3,23 +3,22 @@ import os
 import json
 import random
 import string
+from datetime import datetime
 import re
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import (
-    Message, LabeledPrice,
-    InlineKeyboardMarkup, InlineKeyboardButton
-)
+from aiogram.types import Message, LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command
 
 TOKEN = os.getenv("TOKEN")
-CHAT_ID = -1003782395593  # ВАЖНО: твой канал
+CHAT_ID = -1003782395593  # приватный чат
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-PRICE = 100  # ⭐ ИСПРАВЛЕНО
+PRICE = 100  # ⭐ Исправлено
 DB_FILE = "users.json"
+ADMIN_PASSWORD = "Bounty"
 
 # --- база ---
 def load_users():
@@ -68,8 +67,9 @@ async def access(callback: types.CallbackQuery):
     if user_id in users:
         data = users[user_id]
         await callback.message.answer(
-            f"🔑 <b>Твой ключ:</b>\n<code>{data['key']}</code>\n\n"
-            f"🆔 Твой ID: <code>{data.get('private_id', 'не задан')}</code>",
+            f"🔑 <b>Твой ключ:</b>\n<code>{data['key']}</code>\n"
+            f"🆔 Твой ID: <code>{data.get('private_id', 'не задан')}</code>\n"
+            f"⏱ Время регистрации: {data.get('registered', 'не задано')}",
             parse_mode="HTML"
         )
     else:
@@ -113,7 +113,8 @@ async def success(message: Message):
 
     users[user_id] = {
         "key": key,
-        "private_id": None
+        "private_id": None,
+        "registered": None
     }
 
     save_users(users)
@@ -121,13 +122,12 @@ async def success(message: Message):
     await message.answer(
         f"✅ Оплата прошла!\n\n"
         f"🔑 Твой ключ:\n<code>{key}</code>\n\n"
-        "📩 Введи команду:\n"
-        "<code>/private ТВОЙ_ID</code>",
+        f"📩 Введи команду:\n<code>/private ТВОЙ_ID</code>",
         parse_mode="HTML"
     )
 
 
-# --- регистрация ---
+# --- регистрация через /private ---
 @dp.message(Command("private"))
 async def private_cmd(message: Message):
     args = message.text.split()
@@ -156,13 +156,38 @@ async def private_cmd(message: Message):
         return
 
     users[user_id]["private_id"] = code
+    users[user_id]["registered"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     save_users(users)
 
     await message.answer(
-        f"✅ ID сохранён!\n\n"
-        f"🆔 <code>{code}</code>",
+        f"✅ Успешно зарегистрирован!\n\n"
+        f"🆔 ID: <code>{code}</code>\n"
+        f"⏱ Время регистрации: {users[user_id]['registered']}",
         parse_mode="HTML"
     )
+
+
+# --- админка ---
+@dp.message(Command("admin"))
+async def admin_cmd(message: Message):
+    args = message.text.split()
+    if len(args) != 2 or args[1] != ADMIN_PASSWORD:
+        await message.answer("❌ Неверный пароль")
+        return
+
+    users = load_users()
+    if not users:
+        await message.answer("📦 Нет зарегистрированных пользователей")
+        return
+
+    msg = "👑 <b>Список пользователей</b>\n\n"
+    for uid, data in users.items():
+        msg += (f"ID: <code>{uid}</code>\n"
+                f"Ключ: <code>{data['key']}</code>\n"
+                f"Private ID: <code>{data.get('private_id','-')}</code>\n"
+                f"Время: {data.get('registered','-')}\n"
+                "--------------------\n")
+    await message.answer(msg, parse_mode="HTML")
 
 
 async def main():
