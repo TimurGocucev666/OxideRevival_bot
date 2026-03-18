@@ -1,130 +1,113 @@
 import asyncio
-import re
-from aiogram import Bot, Dispatcher, F
+import os
+import json
+import random
+import string
+
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import Message, LabeledPrice
 from aiogram.filters import CommandStart
-from aiogram.types import (
-    Message, CallbackQuery, LabeledPrice,
-    InlineKeyboardMarkup, InlineKeyboardButton
-)
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# ===== НАСТРОЙКИ =====
-TOKEN = "8785149097:AAGl_nJTi9LgMXdERKonwhnOzYtW87T7Li0"
-CHANNEL_ID = -1001234567890
-PRICE = 100  # Stars
+TOKEN = os.getenv("TOKEN")
 
-bot = Bot(token=TOKEN, parse_mode="HTML")
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ===== ВРЕМЕННОЕ ХРАНИЛИЩЕ =====
-user_codes = {}
-user_access = {}
+PRICE = 100  # 100 stars
+DB_FILE = "users.json"
 
-# ===== ПРОВЕРКА КОДА =====
-def is_valid_code(code: str) -> bool:
-    return bool(re.fullmatch(r"[A-Za-z0-9]{8}", code))
+# --- база ---
+def load_users():
+    if not os.path.exists(DB_FILE):
+        return {}
+    with open(DB_FILE, "r") as f:
+        return json.load(f)
 
-# ===== КНОПКИ =====
-def main_menu():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⭐ Купить доступ", callback_data="buy")
-    kb.button(text="📝 Ввести код", callback_data="code")
-    kb.adjust(1)
-    return kb.as_markup()
+def save_users(data):
+    with open(DB_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-# ===== СТАРТ =====
+def generate_key():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
+
+
+# --- команды ---
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer(
-        f"🎮 <b>Доступ к ЗБТ</b>\n\n"
-        f"⭐ Цена: <b>{PRICE} stars</b>\n\n"
-        "👇 Выберите действие:",
-        reply_markup=main_menu()
+    keyboard = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="💎 Купить ЗБТ")],
+            [types.KeyboardButton(text="📦 Мой доступ")]
+        ],
+        resize_keyboard=True
     )
 
-# ===== ЗАПРОС КОДА =====
-@dp.callback_query(F.data == "code")
-async def request_code(callback: CallbackQuery):
-    await callback.message.answer("Введите код (8 символов):")
-    await callback.answer()
+    await message.answer(
+        "🎮 OxideRevival\n\n"
+        "💰 Цена ЗБТ: 100⭐\n"
+        "🔐 После оплаты ты получишь ключ\n\n"
+        "👇 Выбери действие:",
+        reply_markup=keyboard
+    )
 
-# ===== ОБРАБОТКА ВВОДА =====
-@dp.message()
-async def handle_message(message: Message):
-    text = message.text.strip()
 
-    if not is_valid_code(text):
+@dp.message(lambda m: m.text == "📦 Мой доступ")
+async def my_access(message: Message):
+    users = load_users()
+    user_id = str(message.from_user.id)
+
+    if user_id in users:
+        await message.answer(f"🔑 Твой ключ:\n{users[user_id]}")
+    else:
+        await message.answer("❌ У тебя нет доступа")
+
+
+@dp.message(lambda m: m.text == "💎 Купить ЗБТ")
+async def buy(message: Message):
+    users = load_users()
+    user_id = str(message.from_user.id)
+
+    if user_id in users:
+        await message.answer("✅ Ты уже купил ЗБТ\nНажми «Мой доступ»")
         return
 
-    user_id = message.from_user.id
-
-    if user_id in user_codes:
-        await message.answer("❗ Вы уже вводили код")
-        return
-
-    user_codes[user_id] = text
-    await message.answer(f"✅ Код <code>{text}</code> успешно принят!")
-
-# ===== ПОКУПКА =====
-@dp.callback_query(F.data == "buy")
-async def buy(callback: CallbackQuery):
-    user_id = callback.from_user.id
-
-    if user_access.get(user_id):
-        await callback.answer("Вы уже купили доступ", show_alert=True)
-        return
-
-    if user_id not in user_codes:
-        await callback.answer("Сначала введите код", show_alert=True)
-        return
-
-    prices = [LabeledPrice(label="Доступ к ЗБТ", amount=PRICE)]
+    prices = [LabeledPrice(label="ЗБТ доступ", amount=PRICE * 100)]
 
     await bot.send_invoice(
-        chat_id=callback.message.chat.id,
-        title="Доступ к ЗБТ",
-        description="Оплата через Telegram Stars",
-        payload="buy_access",
+        chat_id=message.chat.id,
+        title="ЗБТ OxideRevival",
+        description="Доступ к закрытому тесту",
+        payload="zbt_access",
         provider_token="",
         currency="XTR",
         prices=prices,
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="💎 Оплатить", pay=True)]]
-        )
     )
 
-    await callback.answer()
 
-# ===== ПРЕДЧЕК =====
 @dp.pre_checkout_query()
-async def pre_checkout(pre_checkout_query):
-    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+async def pre_checkout(pre_checkout_q: types.PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
 
-# ===== УСПЕШНАЯ ОПЛАТА =====
-@dp.message(F.successful_payment)
-async def successful_payment(message: Message):
-    user_id = message.from_user.id
 
-    if user_access.get(user_id):
-        return
+@dp.message(lambda message: message.successful_payment)
+async def success(message: Message):
+    users = load_users()
+    user_id = str(message.from_user.id)
 
-    # создаём одноразовую ссылку
-    invite = await bot.create_chat_invite_link(
-        chat_id=CHANNEL_ID,
-        member_limit=1
-    )
+    key = generate_key()
+    users[user_id] = key
+    save_users(users)
 
     await message.answer(
-        "🎉 <b>Оплата прошла успешно!</b>\n\n"
-        f"🔗 Ваша ссылка для входа:\n{invite.invite_link}"
+        "✅ Оплата прошла!\n\n"
+        f"🔑 Твой ключ:\n{key}\n\n"
+        "⚠️ Сохрани его!"
     )
 
-    user_access[user_id] = True
 
-# ===== ЗАПУСК =====
 async def main():
-    print("🚀 Бот запущен")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
