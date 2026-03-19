@@ -4,25 +4,28 @@ import json
 import random
 import string
 from datetime import datetime
+import re
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import (
     Message, LabeledPrice,
-    InlineKeyboardMarkup, InlineKeyboardButton
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    BotCommand
 )
 from aiogram.filters import CommandStart, Command
 
 TOKEN = os.getenv("TOKEN")
-ADMIN_ID = 123456789  # ВСТАВЬ СВОЙ ID
 
-DONATE_LINK = "https://dalink.to/bountygames3"
+# 👑 АДМИНЫ
+ADMIN_IDS = [123456789]  # вставь свой ID
+ADMIN_USERNAMES = ["Durove14"]
+
+ACCESS_LINK = "https://t.me/+s1xuxYDZbzxjNWZi"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 DB_FILE = "users.json"
-ADMIN_PASSWORD = "Bounty"
-
 PRICE_STARS = 75
 
 
@@ -41,67 +44,119 @@ def generate_key():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
 
 
+# ---------- ПРОВЕРКА АДМИНА ----------
+def is_admin(user):
+    return (user.id in ADMIN_IDS) or (user.username in ADMIN_USERNAMES)
+
+
+# ---------- ПРОВЕРКА ID ----------
+def valid_code(code):
+    return bool(re.fullmatch(r"[A-Za-z0-9]{12}", code))
+
+
 # ---------- UI ----------
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 Купить ЗБТ", callback_data="buy")],
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
-        [InlineKeyboardButton(text="ℹ️ О проекте", callback_data="info")]
+        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")]
     ])
 
 def buy_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⭐ Оплатить Stars", callback_data="pay_stars")],
-        [InlineKeyboardButton(text="💳 DonationAlerts", url=DONATE_LINK)],
-        [InlineKeyboardButton(text="📸 Я оплатил", callback_data="send_proof")],
+        [InlineKeyboardButton(text="⭐ Stars", callback_data="pay_stars")],
+        [InlineKeyboardButton(text="💳 DonationAlerts", url="https://dalink.to/bountygames3")],
+        [InlineKeyboardButton(text="📸 Я оплатил", callback_data="proof")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
+    ])
+
+
+# ---------- КОМАНДЫ ----------
+async def set_commands():
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Запуск"),
+        BotCommand(command="private", description="Регистрация ID"),
+        BotCommand(command="unprivate", description="Удалить ID (админ)")
     ])
 
 
 # ---------- СТАРТ ----------
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer(
-        "🎮 <b>OxideRevival</b>\n\n"
-        "🔥 Закрытый Бета Тест\n"
-        "💰 Цена: <b>75⭐ или 100₽</b>\n\n"
-        "✨ Быстрая покупка и моментальная выдача\n\n"
-        "👇 Выбери действие:",
-        reply_markup=main_menu(),
-        parse_mode="HTML"
-    )
+    await message.answer("🎮 OxideRevival\n💰 75⭐ или 100₽", reply_markup=main_menu())
 
 
-# ---------- МЕНЮ ----------
+# ---------- PRIVATE ----------
+@dp.message(Command("private"))
+async def private_cmd(message: Message):
+    args = message.text.split()
+
+    if len(args) != 2:
+        await message.answer("❌ /private ABC123DEF456")
+        return
+
+    code = args[1]
+
+    if not valid_code(code):
+        await message.answer("❌ ID должен быть 12 символов (A-Z 0-9)")
+        return
+
+    users = load_users()
+    uid = str(message.from_user.id)
+
+    if uid not in users:
+        users[uid] = {}
+
+    users[uid]["private_id"] = code
+    users[uid]["time_reg"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    save_users(users)
+
+    await message.answer(f"✅ ID зарегистрирован:\n{code}")
+
+
+# ---------- UNPRIVATE ----------
+@dp.message(Command("unprivate"))
+async def unprivate(message: Message):
+    if not is_admin(message.from_user):
+        await message.answer("❌ Нет доступа")
+        return
+
+    args = message.text.split()
+    if len(args) != 2:
+        await message.answer("❌ /unprivate USER_ID")
+        return
+
+    uid = args[1]
+    users = load_users()
+
+    if uid in users:
+        users[uid]["private_id"] = None
+        save_users(users)
+        await message.answer("✅ ID удалён")
+    else:
+        await message.answer("❌ Пользователь не найден")
+
+
+# ---------- ПОКУПКА ----------
 @dp.callback_query(lambda c: c.data == "buy")
 async def buy(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "💰 <b>Выбери способ оплаты:</b>\n\n"
-        "⭐ Stars — мгновенно\n"
-        "💳 DonationAlerts — вручную",
-        reply_markup=buy_menu(),
-        parse_mode="HTML"
-    )
+    await callback.message.edit_text("Выбери оплату:", reply_markup=buy_menu())
 
 
 @dp.callback_query(lambda c: c.data == "back")
 async def back(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "🎮 <b>OxideRevival</b>\n\nВыбери действие:",
-        reply_markup=main_menu(),
-        parse_mode="HTML"
-    )
+    await callback.message.edit_text("Меню:", reply_markup=main_menu())
 
 
 # ---------- STARS ----------
 @dp.callback_query(lambda c: c.data == "pay_stars")
 async def pay_stars(callback: types.CallbackQuery):
-    prices = [LabeledPrice(label="ЗБТ доступ", amount=PRICE_STARS)]
+    prices = [LabeledPrice(label="ЗБТ", amount=PRICE_STARS)]
 
     await bot.send_invoice(
         chat_id=callback.message.chat.id,
-        title="ЗБТ OxideRevival",
-        description="Доступ к игре",
+        title="ЗБТ",
+        description="Доступ",
         payload="zbt",
         provider_token="",
         currency="XTR",
@@ -119,87 +174,78 @@ async def success(message: Message):
     users = load_users()
     uid = str(message.from_user.id)
 
-    key = generate_key()
+    if uid not in users:
+        users[uid] = {}
 
-    users[uid] = {
-        "key": key,
-        "status": "paid",
-        "username": message.from_user.username,
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
+    users[uid]["key"] = generate_key()
+    users[uid]["status"] = "paid"
 
     save_users(users)
 
     await message.answer(
-        f"✅ <b>Оплата прошла!</b>\n\n"
-        f"🔑 Твой ключ:\n<code>{key}</code>",
-        parse_mode="HTML"
+        f"✅ Оплата прошла!\n\n"
+        f"🔗 Доступ:\n{ACCESS_LINK}"
     )
 
 
-# ---------- DONATE ----------
-@dp.callback_query(lambda c: c.data == "send_proof")
-async def send_proof(callback: types.CallbackQuery):
-    await callback.message.answer(
-        "📸 <b>Отправь скрин оплаты</b>\n\n"
-        "После проверки ты получишь доступ",
-        parse_mode="HTML"
-    )
+# ---------- СКРИН ----------
+@dp.callback_query(lambda c: c.data == "proof")
+async def proof(callback):
+    await callback.message.answer("📸 Отправь скрин оплаты")
 
 
 @dp.message(lambda m: m.photo)
-async def handle_photo(message: Message):
-    users = load_users()
+async def photo(message: Message):
     uid = str(message.from_user.id)
+    users = load_users()
 
-    users[uid] = {
-        "status": "pending",
-        "username": message.from_user.username,
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
+    if uid not in users:
+        users[uid] = {}
 
+    users[uid]["status"] = "pending"
     save_users(users)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"ok_{uid}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"no_{uid}")
+            InlineKeyboardButton(text="✅", callback_data=f"ok_{uid}"),
+            InlineKeyboardButton(text="❌", callback_data=f"no_{uid}")
         ]
     ])
 
     await bot.send_photo(
-        ADMIN_ID,
+        ADMIN_IDS[0],
         photo=message.photo[-1].file_id,
-        caption=f"💸 Новая оплата\nID: {uid}",
+        caption=f"💸 Заявка\nID: {uid}",
         reply_markup=kb
     )
 
     await message.answer("⏳ Отправлено на проверку")
 
 
-# ---------- АДМИН ----------
+# ---------- АДМИН РЕШЕНИЯ ----------
 @dp.callback_query(lambda c: c.data.startswith("ok_"))
-async def ok(callback: types.CallbackQuery):
+async def ok(callback):
     uid = callback.data.split("_")[1]
     users = load_users()
 
     key = generate_key()
+
     users[uid]["key"] = key
     users[uid]["status"] = "paid"
-
     save_users(users)
 
     await bot.send_message(
         uid,
-        f"✅ Оплата подтверждена\n🔑 Ключ:\n<code>{key}</code>",
-        parse_mode="HTML"
+        f"✅ Оплата подтверждена!\n\n"
+        f"🔗 Доступ:\n{ACCESS_LINK}\n\n"
+        f"💬 Добро пожаловать в ЗБТ!"
     )
 
     await callback.message.edit_text("✅ Подтверждено")
 
 
 @dp.callback_query(lambda c: c.data.startswith("no_"))
-async def no(callback: types.CallbackQuery):
+async def no(callback):
     uid = callback.data.split("_")[1]
 
     await bot.send_message(uid, "❌ Оплата отклонена")
@@ -208,57 +254,20 @@ async def no(callback: types.CallbackQuery):
 
 # ---------- ПРОФИЛЬ ----------
 @dp.callback_query(lambda c: c.data == "profile")
-async def profile(callback: types.CallbackQuery):
+async def profile(callback):
     users = load_users()
     uid = str(callback.from_user.id)
 
     if uid not in users:
-        await callback.message.answer("❌ Нет данных")
+        await callback.message.answer("Нет данных")
         return
 
-    d = users[uid]
-
-    await callback.message.answer(
-        f"👤 <b>Профиль</b>\n\n"
-        f"Username: @{d.get('username','-')}\n"
-        f"Статус: {d.get('status','-')}\n"
-        f"Ключ: {d.get('key','нет')}\n"
-        f"Дата: {d.get('time','-')}",
-        parse_mode="HTML"
-    )
-
-
-# ---------- ИНФО ----------
-@dp.callback_query(lambda c: c.data == "info")
-async def info(callback: types.CallbackQuery):
-    await callback.message.answer(
-        "ℹ️ <b>OxideRevival</b>\n\n"
-        "Это закрытый тест проекта\n"
-        "Покупая доступ — ты поддерживаешь разработку ❤️",
-        parse_mode="HTML"
-    )
-
-
-# ---------- АДМИНКА ----------
-@dp.message(Command("admin"))
-async def admin(message: Message):
-    args = message.text.split()
-
-    if len(args) != 2 or args[1] != ADMIN_PASSWORD:
-        await message.answer("❌ Неверный пароль")
-        return
-
-    users = load_users()
-
-    text = "👑 <b>Пользователи:</b>\n\n"
-    for uid, d in users.items():
-        text += f"{uid} | {d.get('status')} | {d.get('key','-')}\n"
-
-    await message.answer(text, parse_mode="HTML")
+    await callback.message.answer(str(users[uid]))
 
 
 # ---------- ЗАПУСК ----------
 async def main():
+    await set_commands()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
