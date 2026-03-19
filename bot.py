@@ -6,6 +6,7 @@ import string
 from datetime import datetime, timedelta
 import re
 import logging
+from contextlib import asynccontextmanager
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import (
@@ -14,22 +15,27 @@ from aiogram.types import (
     BotCommand
 )
 from aiogram.filters import CommandStart, Command
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
+# Конфигурация
 TOKEN = os.getenv("TOKEN")
+if not TOKEN:
+    raise ValueError("TOKEN не установлен в переменных окружения")
+
+PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN")  # Для оплаты Stars
 
 # 👑 АДМИНЫ
-ADMIN_IDS = [123456789]  # твой ID
-ADMIN_USERNAMES = ["Durove14"]
+ADMIN_IDS = [123456789]  # Замените на ваш ID
+ADMIN_USERNAMES = ["Durove14"]  # Замените на ваш username
 
-ACCESS_LINK = "https://t.me/+s1xuxYDZbzxjNWZi"  # FIX: исправлен URL
+ACCESS_LINK = "https://t.me/+s1xuxYDZbzxjNWZi"  # Исправьте на корректный URL
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -38,33 +44,46 @@ DB_FILE = "users.json"
 PRICE_STARS = 75
 PENDING_TIMEOUT_HOURS = 24  # Время ожидания подтверждения оплаты в часах
 
-# ---------- БАЗА ----------
-def load_users():
-    if not os.path.exists(DB_FILE):
-        return {}
+# ---------- БАЗА ДАННЫХ ----------
+@asynccontextmanager
+async def get_users():
+    """Контекстный менеджер для безопасной работы с базой данных"""
     try:
-        with open(DB_FILE, "r") as f:
-            return json.load(f)
+        if not os.path.exists(DB_FILE):
+            data = {}
+        else:
+            with open(DB_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        yield data
     except Exception as e:
         logger.error(f"Ошибка загрузки базы данных: {e}")
-        return {}
+        yield {}
+    finally:
+        try:
+            with open(DB_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Ошибка сохранения базы данных: {e}")
 
-def save_users(data):
-    try:
-        with open(DB_FILE, "w") as f:
-            json.dump(data, f, indent=4)
-    except Exception as e:
-        logger.error(f"Ошибка сохранения базы данных: {e}")
+async def load_users():
+    async with get_users() as users:
+        return users
+
+async def save_users(data):
+    async with get_users() as _:
+        pass  # Сохранение происходит автоматически при выходе из контекста
 
 def generate_key():
+    """Генерация уникального ключа доступа"""
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
 
 def valid_code(code):
+    """Проверка формата кода (12 символов, буквы и цифры)"""
     return bool(re.fullmatch(r"[A-Za-z0-9]{12}", code))
 
-# IMPROVEMENT: Проверка уникальности private_id
-def is_unique_private_id(code):
-    users = load_users()
+async def is_unique_private_id(code):
+    """Проверка уникальности private_id"""
+    users = await load_users()
     for user_data in users.values():
         if user_data.get('private_id') == code:
             return False
@@ -72,16 +91,19 @@ def is_unique_private_id(code):
 
 # ---------- АДМИН ----------
 def is_admin(user):
+    """Проверка прав администратора"""
     return (user.id in ADMIN_IDS) or (user.username in ADMIN_USERNAMES)
 
 # ---------- UI ----------
 def main_menu():
+    """Главное меню"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 Купить ЗБТ", callback_data="buy")],
         [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")]
     ])
 
 def buy_menu():
+    """Меню оплаты"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⭐ Stars", callback_data="stars")],
         [InlineKeyboardButton(text="💳 Donation", url="https://dalink.to/bountygames3")],
@@ -89,8 +111,18 @@ def buy_menu():
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
     ])
 
+def admin_approval_menu(user_id):
+    """Клавиатура для модерации"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"ok_{user_id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"no_{user_id}")
+        ]
+    ])
+
 # ---------- КОМАНДЫ ----------
 async def set_commands():
+    """Установка команд бота"""
     await bot.set_my_commands([
         BotCommand(command="start", description="Запуск"),
         BotCommand(command="private", description="Регистрация ID"),
@@ -112,45 +144,45 @@ async def start(message: Message):
 # ---------- PRIVATE ----------
 @dp.message(Command("private"))
 async def private_cmd(message: Message):
-    users = load_users()
     uid = str(message.from_user.id)
-
     args = message.text.split()
 
-    if uid in users and "private_id" in users[uid] and len(args) == 1:
-        data = users[uid]
-        await message.answer(
-            f"🆔 ID: {data.get('private_id')}\n"
-            f"📅 Дата: {data.get('time_reg')}\n"
-            f"💎 Статус: {data.get('status','-')}\n"
-            f"🔑 Ключ: {data.get('key','нет')}"
-        )
-        return
+    async with get_users() as users:
+        # Показать текущий статус если нет аргументов
+        if uid in users and "private_id" in users[uid] and len(args) == 1:
+            data = users[uid]
+            await message.answer(
+                f"🆔 ID: {data.get('private_id')}\n"
+                f"📅 Дата: {data.get('time_reg')}\n"
+                f"💎 Статус: {data.get('status', '-')}\n"
+                f"🔑 Ключ: {data.get('key', 'нет')}"
+            )
+            return
 
-    if len(args) != 2:
-        await message.answer("❌ /private ABC123DEF456")
-        return
+        if len(args) != 2:
+            await message.answer("❌ Используйте: /private ABC123DEF456")
+            return
 
-    code = args[1]
+        code = args[1]
 
-    if not valid_code(code):
-        await message.answer("❌ ID должен быть 12 символов")
-        return
+        if not valid_code(code):
+            await message.answer("❌ ID должен быть 12 символов (буквы и цифры)")
+            return
 
-    # FIX: Проверка уникальности ID
-    if not is_unique_private_id(code):
-        await message.answer("❌ Этот ID уже занят")
-        return
+        # Проверка уникальности
+        if not await is_unique_private_id(code):
+            await message.answer("❌ Этот ID уже занят")
+            return
 
-    if uid not in users:
-        users[uid] = {}
+        # Регистрация нового ID
+        if uid not in users:
+            users[uid] = {}
 
-    users[uid]["private_id"] = code
-    users[uid]["time_reg"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        users[uid]["private_id"] = code
+        users[uid]["time_reg"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        users[uid].setdefault("status", "registered")
 
-    save_users(users)
-
-    await message.answer(f"✅ ID зарегистрирован:\n{code}")
+        await message.answer(f"✅ ID зарегистрирован:\n{code}")
 
 # ---------- UNPRIVATE ----------
 @dp.message(Command("unprivate"))
@@ -161,69 +193,24 @@ async def unprivate(message: Message):
 
     args = message.text.split()
     if len(args) != 2:
-        await message.answer("❌ /unprivate USER_ID")
+        await message.answer("❌ Используйте: /unprivate USER_ID")
         return
 
-    uid = args[1]
-    users = load_users()
+    target_uid = args[1]
 
-    if uid in users:
-        users[uid]["private_id"] = None
-        save_users(users)
-        await message.answer("✅ ID удалён")
-    else:
-        await message.answer("❌ Не найден")
+    async with get_users() as users:
+        if target_uid in users and users[target_uid].get("private_id"):
+            del users[target_uid]["private_id"]
+            await message.answer("✅ ID удалён")
+        else:
+            await message.answer("❌ Пользователь не найден или ID не установлен")
 
 # ---------- МЕНЮ ----------
 @dp.callback_query(lambda c: c.data == "buy")
-async def buy(callback):
-    await callback.message.edit_text("💰 Выбери оплату:", reply_markup=buy_menu())
+async def buy(callback: types.CallbackQuery):
+    await callback.message.edit_text("💰 Выбери способ оплаты:", reply_markup=buy_menu())
+    await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "back")
-async def back(callback):
-    await callback.message.edit_text("Меню:", reply_markup=main_menu())
-
-# ---------- STARS ----------
-@dp.callback_query(lambda c: c.data == "stars")
-async def stars(callback):
-    prices = [LabeledPrice(label="ЗБТ", amount=PRICE_STARS)]
-
-    # FIX: Заменить на реальный provider_token
-    provider_token = os.getenv("PROVIDER_TOKEN")  # Получаем из переменных окружения
-    if not provider_token:
-        await callback.answer("❌ Оплата временно недоступна", show_alert=True)
-        return
-
-    await bot.send_invoice(
-        chat_id=callback.message.chat.id,
-        title="ЗБТ",
-        description="Доступ",
-        payload="zbt",
-        provider_token=provider_token,
-        currency="XTR",
-        prices=prices,
-    )
-
-@dp.pre_checkout_query()
-async def pre_checkout(q):
-    await bot.answer_pre_checkout_query(q.id, ok=True)
-
-@dp.message(lambda m: m.successful_payment)
-async def success(message: Message):
-    users = load_users()
-    uid = str(message.from_user.id)
-
-    if uid not in users:
-        users[uid] = {}
-
-    users[uid]["key"] = generate_key()
-    users[uid]["status"] = "paid"
-
-    save_users(users)
-
-    await message.answer(
-        f"✅ Оплачено!\n\n🔗 {ACCESS_LINK}"
-    )
-
-# ---------- СКРИН ----------
-@dp.callback
+async def back(callback: types.CallbackQuery):
+    await callback.message.edit
