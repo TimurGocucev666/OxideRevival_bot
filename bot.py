@@ -17,7 +17,7 @@ from aiogram.filters import CommandStart, Command
 TOKEN = os.getenv("TOKEN")
 
 # 👑 АДМИНЫ
-ADMIN_IDS = [123456789]  # вставь свой ID
+ADMIN_IDS = [123456789]  # твой ID
 ADMIN_USERNAMES = ["Durove14"]
 
 ACCESS_LINK = "https://t.me/+s1xuxYDZbzxjNWZi"
@@ -43,15 +43,13 @@ def save_users(data):
 def generate_key():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
 
-
-# ---------- ПРОВЕРКА АДМИНА ----------
-def is_admin(user):
-    return (user.id in ADMIN_IDS) or (user.username in ADMIN_USERNAMES)
-
-
-# ---------- ПРОВЕРКА ID ----------
 def valid_code(code):
     return bool(re.fullmatch(r"[A-Za-z0-9]{12}", code))
+
+
+# ---------- АДМИН ----------
+def is_admin(user):
+    return (user.id in ADMIN_IDS) or (user.username in ADMIN_USERNAMES)
 
 
 # ---------- UI ----------
@@ -63,8 +61,8 @@ def main_menu():
 
 def buy_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⭐ Stars", callback_data="pay_stars")],
-        [InlineKeyboardButton(text="💳 DonationAlerts", url="https://dalink.to/bountygames3")],
+        [InlineKeyboardButton(text="⭐ Stars", callback_data="stars")],
+        [InlineKeyboardButton(text="💳 Donation", url="https://dalink.to/bountygames3")],
         [InlineKeyboardButton(text="📸 Я оплатил", callback_data="proof")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
     ])
@@ -82,13 +80,33 @@ async def set_commands():
 # ---------- СТАРТ ----------
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer("🎮 OxideRevival\n💰 75⭐ или 100₽", reply_markup=main_menu())
+    await message.answer(
+        "🎮 <b>OxideRevival</b>\n\n"
+        "🔥 Закрытый Бета Тест\n"
+        "💰 75⭐ или 100₽\n\n"
+        "👇 Выбери действие:",
+        reply_markup=main_menu(),
+        parse_mode="HTML"
+    )
 
 
 # ---------- PRIVATE ----------
 @dp.message(Command("private"))
 async def private_cmd(message: Message):
+    users = load_users()
+    uid = str(message.from_user.id)
+
     args = message.text.split()
+
+    if uid in users and "private_id" in users[uid] and len(args) == 1:
+        data = users[uid]
+        await message.answer(
+            f"🆔 ID: {data.get('private_id')}\n"
+            f"📅 Дата: {data.get('time_reg')}\n"
+            f"💎 Статус: {data.get('status','-')}\n"
+            f"🔑 Ключ: {data.get('key','нет')}"
+        )
+        return
 
     if len(args) != 2:
         await message.answer("❌ /private ABC123DEF456")
@@ -97,11 +115,8 @@ async def private_cmd(message: Message):
     code = args[1]
 
     if not valid_code(code):
-        await message.answer("❌ ID должен быть 12 символов (A-Z 0-9)")
+        await message.answer("❌ ID должен быть 12 символов")
         return
-
-    users = load_users()
-    uid = str(message.from_user.id)
 
     if uid not in users:
         users[uid] = {}
@@ -134,23 +149,23 @@ async def unprivate(message: Message):
         save_users(users)
         await message.answer("✅ ID удалён")
     else:
-        await message.answer("❌ Пользователь не найден")
+        await message.answer("❌ Не найден")
 
 
-# ---------- ПОКУПКА ----------
+# ---------- МЕНЮ ----------
 @dp.callback_query(lambda c: c.data == "buy")
-async def buy(callback: types.CallbackQuery):
-    await callback.message.edit_text("Выбери оплату:", reply_markup=buy_menu())
+async def buy(callback):
+    await callback.message.edit_text("💰 Выбери оплату:", reply_markup=buy_menu())
 
 
 @dp.callback_query(lambda c: c.data == "back")
-async def back(callback: types.CallbackQuery):
+async def back(callback):
     await callback.message.edit_text("Меню:", reply_markup=main_menu())
 
 
 # ---------- STARS ----------
-@dp.callback_query(lambda c: c.data == "pay_stars")
-async def pay_stars(callback: types.CallbackQuery):
+@dp.callback_query(lambda c: c.data == "stars")
+async def stars(callback):
     prices = [LabeledPrice(label="ЗБТ", amount=PRICE_STARS)]
 
     await bot.send_invoice(
@@ -165,7 +180,7 @@ async def pay_stars(callback: types.CallbackQuery):
 
 
 @dp.pre_checkout_query()
-async def pre_checkout(q: types.PreCheckoutQuery):
+async def pre_checkout(q):
     await bot.answer_pre_checkout_query(q.id, ok=True)
 
 
@@ -183,8 +198,7 @@ async def success(message: Message):
     save_users(users)
 
     await message.answer(
-        f"✅ Оплата прошла!\n\n"
-        f"🔗 Доступ:\n{ACCESS_LINK}"
+        f"✅ Оплачено!\n\n🔗 {ACCESS_LINK}"
     )
 
 
@@ -196,14 +210,20 @@ async def proof(callback):
 
 @dp.message(lambda m: m.photo)
 async def photo(message: Message):
-    uid = str(message.from_user.id)
     users = load_users()
+    uid = str(message.from_user.id)
 
     if uid not in users:
         users[uid] = {}
 
     users[uid]["status"] = "pending"
     save_users(users)
+
+    text = (
+        f"💸 Новая заявка\n"
+        f"👤 @{message.from_user.username}\n"
+        f"🆔 {uid}"
+    )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -212,44 +232,46 @@ async def photo(message: Message):
         ]
     ])
 
-    await bot.send_photo(
-        ADMIN_IDS[0],
-        photo=message.photo[-1].file_id,
-        caption=f"💸 Заявка\nID: {uid}",
-        reply_markup=kb
-    )
+    # отправка ВСЕМ админам
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_photo(
+                admin_id,
+                photo=message.photo[-1].file_id,
+                caption=text,
+                reply_markup=kb
+            )
+        except:
+            pass
 
     await message.answer("⏳ Отправлено на проверку")
 
 
-# ---------- АДМИН РЕШЕНИЯ ----------
+# ---------- АДМИН ----------
 @dp.callback_query(lambda c: c.data.startswith("ok_"))
 async def ok(callback):
     uid = callback.data.split("_")[1]
     users = load_users()
 
     key = generate_key()
-
     users[uid]["key"] = key
     users[uid]["status"] = "paid"
     save_users(users)
 
     await bot.send_message(
         uid,
-        f"✅ Оплата подтверждена!\n\n"
-        f"🔗 Доступ:\n{ACCESS_LINK}\n\n"
-        f"💬 Добро пожаловать в ЗБТ!"
+        f"✅ Оплата подтверждена!\n\n🔗 {ACCESS_LINK}"
     )
 
-    await callback.message.edit_text("✅ Подтверждено")
+    await callback.message.edit_text("✅ OK")
 
 
 @dp.callback_query(lambda c: c.data.startswith("no_"))
 async def no(callback):
     uid = callback.data.split("_")[1]
 
-    await bot.send_message(uid, "❌ Оплата отклонена")
-    await callback.message.edit_text("❌ Отклонено")
+    await bot.send_message(uid, "❌ Отклонено")
+    await callback.message.edit_text("❌ NO")
 
 
 # ---------- ПРОФИЛЬ ----------
@@ -259,10 +281,17 @@ async def profile(callback):
     uid = str(callback.from_user.id)
 
     if uid not in users:
-        await callback.message.answer("Нет данных")
+        await callback.message.answer("❌ Нет данных")
         return
 
-    await callback.message.answer(str(users[uid]))
+    d = users[uid]
+
+    await callback.message.answer(
+        f"👤 Профиль\n\n"
+        f"🆔 ID: {d.get('private_id','нет')}\n"
+        f"💎 Статус: {d.get('status','-')}\n"
+        f"🔑 Ключ: {d.get('key','нет')}"
+    )
 
 
 # ---------- ЗАПУСК ----------
