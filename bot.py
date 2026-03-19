@@ -17,7 +17,7 @@ from aiogram.filters import CommandStart, Command
 TOKEN = os.getenv("TOKEN")
 
 # 👑 АДМИНЫ
-ADMIN_IDS = [123456789]  # ВСТАВЬ СВОЙ ID
+ADMIN_IDS = [7728468302]  # ВСТАВЬ СВОЙ ID
 ADMIN_USERNAMES = ["Durove14"]
 
 ACCESS_LINK = "https://t.me/+s1xuxYDZbzxjNWZi"
